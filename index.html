@@ -1,64 +1,100 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>توقعات كرة القدم</title>
-<style>
-:root{--bg:#f4f6f4;--card:#fff;--tx:#14201a;--mu:#5d6b63;--h:#12803f;--d:#8a949b;--a:#c4571d;--bd:#dde3de}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1512;--card:#18211c;--tx:#e8f0ea;--mu:#9aa9a0;--h:#3fbf74;--bd:#2a362f}}
-body{margin:0;padding:14px;background:var(--bg);color:var(--tx);font-family:system-ui,Tahoma,sans-serif}
-.w{max-width:700px;margin:auto}
-select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx);font:inherit;margin-bottom:12px}
-.c{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:12px}
-small{display:block;color:var(--mu);margin:2px 0 8px}
-.bar{display:flex;height:30px;border-radius:8px;overflow:hidden;color:#fff;font-weight:700;font-size:.85rem;margin:6px 0}
-.bar div{display:flex;align-items:center;justify-content:center}
-.r{display:flex;justify-content:space-between;font-size:.9rem;padding:3px 0}
-</style>
-</head>
-<body>
-<div class="w">
-<h1>⚽ توقعات كرة القدم</h1>
-<select id="c" onchange="load()">
-<option value="PL">الدوري الإنجليزي</option>
-<option value="PD">الدوري الإسباني</option>
-<option value="SA">الدوري الإيطالي</option>
-<option value="BL1">الدوري الألماني</option>
-<option value="FL1">الدوري الفرنسي</option>
-<option value="CL">دوري الأبطال</option>
-</select>
-<div id="o"></div>
-<p><small>نموذج إحصائي تقريبي. ماكاين حتى توقع مضمون.</small></p>
-</div>
-<script>
-const $ = (s) => document.querySelector(s);
-const pc = (x) => Math.round(x * 100) + "%";
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-function card(m) {
-  const mx = Math.max(m.h, m.d, m.a);
-  const pick = mx === m.h ? "فوز " + m.home : mx === m.a ? "فوز " + m.away : "تعادل";
-  return `<div class="c"><b>${esc(m.home)} ⚔️ ${esc(m.away)}</b>
-<small>${new Date(m.date).toLocaleString("ar-MA")}</small>
-<div>🎯 <b>${esc(pick)}</b> (النتيجة الأرجح ${m.top[0][0]})</div>
-<div class="bar"><div style="width:${m.h * 100}%;background:var(--h)">${pc(m.h)}</div><div style="width:${m.d * 100}%;background:var(--d)">${pc(m.d)}</div><div style="width:${m.a * 100}%;background:var(--a)">${pc(m.a)}</div></div>
-<div class="r"><span>أهداف متوقعة</span><b>${m.xh.toFixed(2)} - ${m.xa.toFixed(2)}</b></div>
-<div class="r"><span>أكثر من 2.5 هدف</span><b>${pc(m.o25)}</b></div>
-<div class="r"><span>الفريقان يسجلان</span><b>${pc(m.bt)}</b></div></div>`;
-}
-async function load() {
-  const o = $("#o");
-  o.textContent = "كنحمل...";
-  try {
-    const r = await fetch("/api/predict?comp=" + $("#c").value);
-    const j = await r.json();
-    if (j.error) throw new Error(j.error);
-    o.innerHTML = j.length ? j.map(card).join("") : "ما كاينة حتى مباراة فالـ 3 أيام الجاية";
-  } catch (e) {
-    o.textContent = "خطأ: " + e.message;
+const K = 5, D = 0.97;
+const pois = (l, k) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
+
+function probs(xh, xa) {
+  let h = 0, d = 0, a = 0, o25 = 0, bt = 0, sc = [];
+  for (let i = 0; i <= 9; i++) for (let j = 0; j <= 9; j++) {
+    const p = pois(xh, i) * pois(xa, j);
+    if (i > j) h += p; else if (i == j) d += p; else a += p;
+    if (i + j > 2) o25 += p;
+    if (i && j) bt += p;
+    sc.push([i + "-" + j, p]);
   }
+  const t = h + d + a;
+  sc.sort((x, y) => y[1] - x[1]);
+  return { h: h / t, d: d / t, a: a / t, o25: o25 / t, bt: bt / t, top: sc.slice(0, 3).map(s => [s[0], s[1] / t]) };
 }
-load();
-</script>
-</body>
-</html>
+
+// الأمم الأوروبية عبر API-Football (المفتاح AF_KEY فـ Vercel)
+const getNL = async () => {
+  const r = await fetch("https://v3.football.api-sports.io/fixtures?league=5&season=2026", {
+    headers: { "x-apisports-key": process.env.AF_KEY || "" },
+  });
+  const j = await r.json();
+  const e = j.errors;
+  const msg = Array.isArray(e) ? e[0] : e && Object.values(e)[0];
+  if (msg) throw new Error(String(msg));
+  const done = ["FT", "AET", "PEN"];
+  return (j.response || []).map((x) => ({
+    utcDate: x.fixture.date,
+    status: done.includes(x.fixture.status.short) ? "FINISHED" : "SCHEDULED",
+    homeTeam: { name: x.teams.home.name },
+    awayTeam: { name: x.teams.away.name },
+    score: { fullTime: { home: x.goals.home, away: x.goals.away } },
+  }));
+};
+
+module.exports = async (req, res) => {
+  try {
+    const comp = String(req.query.comp || "PL").replace(/[^A-Z0-9]/g, "");
+    const H = { "X-Auth-Token": process.env.FD_TOKEN || "" };
+    const base = "https://api.football-data.org/v4/competitions/" + comp + "/matches";
+    const get = async (u) => {
+      const r = await fetch(u, { headers: H });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.message || ("HTTP " + r.status));
+      return j.matches || [];
+    };
+    const f = (d) => d.toISOString().slice(0, 10);
+
+    let fin, up;
+    if (comp === "NL") {
+      const all = await getNL();
+      const now = Date.now();
+      fin = all.filter((m) => m.status === "FINISHED");
+      up = all.filter((m) => {
+        const t = new Date(m.utcDate).getTime();
+        return m.status !== "FINISHED" && t > now - 3 * 36e5 && t < now + 3 * 864e5;
+      });
+    } else {
+      fin = await get(base + "?status=FINISHED");
+      up = (await get(base + "?dateFrom=" + f(new Date()) + "&dateTo=" + f(new Date(Date.now() + 3 * 864e5))))
+        .filter((m) => m.status !== "FINISHED");
+    }
+
+    fin.sort((a, b) => a.utcDate.localeCompare(b.utcDate));
+    const S = {}, last = {};
+    let sh = 0, sa = 0, n = 0;
+    const g = (t) => S[t] || (S[t] = { f: 0, a: 0, n: 0 });
+    for (const m of fin) {
+      const hg = m.score.fullTime.home, ag = m.score.fullTime.away;
+      if (hg == null || ag == null) continue;
+      const h = g(m.homeTeam.name), a = g(m.awayTeam.name);
+      for (const [x, gf, ga] of [[h, hg, ag], [a, ag, hg]]) {
+        x.f = x.f * D + gf; x.a = x.a * D + ga; x.n = x.n * D + 1;
+      }
+      last[m.homeTeam.name] = m.utcDate; last[m.awayTeam.name] = m.utcDate;
+      sh += hg; sa += ag; n++;
+    }
+    if (n < 20) throw new Error("مباريات قليلة فهاد الموسم باش نحسبو");
+    const avg = (sh + sa) / (2 * n);
+    const att = (t) => ((g(t).f + K * avg) / (g(t).n + K)) / avg;
+    const def = (t) => ((g(t).a + K * avg) / (g(t).n + K)) / avg;
+    const rf = (t, d) => {
+      if (!last[t]) return 1;
+      const r = (new Date(d) - new Date(last[t])) / 864e5;
+      return r >= 5 ? 1 : r >= 4 ? 0.98 : r >= 3 ? 0.95 : 0.92;
+    };
+
+    const out = up.map((m) => {
+      const h = m.homeTeam.name, a = m.awayTeam.name;
+      const xh = Math.min(Math.max((sh / n) * att(h) * def(a) * rf(h, m.utcDate), 0.2), 4.5);
+      const xa = Math.min(Math.max((sa / n) * att(a) * def(h) * rf(a, m.utcDate), 0.2), 4.5);
+      return { date: m.utcDate, home: h, away: a, xh, xa, ...probs(xh, xa) };
+    });
+    res.setHeader("Cache-Control", "s-maxage=1800");
+    res.status(200).json(out);
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+};
