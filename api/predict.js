@@ -15,6 +15,25 @@ function probs(xh, xa) {
   return { h: h / t, d: d / t, a: a / t, o25: o25 / t, bt: bt / t, top: sc.slice(0, 3).map(s => [s[0], s[1] / t]) };
 }
 
+// الأمم الأوروبية عبر API-Football (المفتاح AF_KEY فـ Vercel)
+const getNL = async () => {
+  const r = await fetch("https://v3.football.api-sports.io/fixtures?league=5&season=2026", {
+    headers: { "x-apisports-key": process.env.AF_KEY || "" },
+  });
+  const j = await r.json();
+  const e = j.errors;
+  const msg = Array.isArray(e) ? e[0] : e && Object.values(e)[0];
+  if (msg) throw new Error(String(msg));
+  const done = ["FT", "AET", "PEN"];
+  return (j.response || []).map((x) => ({
+    utcDate: x.fixture.date,
+    status: done.includes(x.fixture.status.short) ? "FINISHED" : "SCHEDULED",
+    homeTeam: { name: x.teams.home.name },
+    awayTeam: { name: x.teams.away.name },
+    score: { fullTime: { home: x.goals.home, away: x.goals.away } },
+  }));
+};
+
 module.exports = async (req, res) => {
   try {
     const comp = String(req.query.comp || "PL").replace(/[^A-Z0-9]/g, "");
@@ -27,9 +46,21 @@ module.exports = async (req, res) => {
       return j.matches || [];
     };
     const f = (d) => d.toISOString().slice(0, 10);
-    const fin = await get(base + "?status=FINISHED");
-    const up = (await get(base + "?dateFrom=" + f(new Date()) + "&dateTo=" + f(new Date(Date.now() + 3 * 864e5))))
-      .filter((m) => m.status !== "FINISHED");
+
+    let fin, up;
+    if (comp === "NL") {
+      const all = await getNL();
+      const now = Date.now();
+      fin = all.filter((m) => m.status === "FINISHED");
+      up = all.filter((m) => {
+        const t = new Date(m.utcDate).getTime();
+        return m.status !== "FINISHED" && t > now - 3 * 36e5 && t < now + 3 * 864e5;
+      });
+    } else {
+      fin = await get(base + "?status=FINISHED");
+      up = (await get(base + "?dateFrom=" + f(new Date()) + "&dateTo=" + f(new Date(Date.now() + 3 * 864e5))))
+        .filter((m) => m.status !== "FINISHED");
+    }
 
     fin.sort((a, b) => a.utcDate.localeCompare(b.utcDate));
     const S = {}, last = {};
